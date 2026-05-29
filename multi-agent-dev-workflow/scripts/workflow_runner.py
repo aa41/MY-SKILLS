@@ -23,6 +23,7 @@ UI_REPLICATION_APPROVAL_ID = "approval-ui-replication-001"
 BUSINESS_LOGIC_APPROVAL_ID = "approval-business-logic-001"
 ACCEPTANCE_APPROVAL_ID = "approval-acceptance-001"
 TERMINAL_APPROVAL_DECISIONS = {"approve", "reject"}
+NATIVE_UI_TARGETS = {"flutter", "android", "ios"}
 
 DOC_ROLE_DEFINITIONS = [
     {
@@ -1613,7 +1614,7 @@ def ui_replication_dry_run_plan() -> dict[str, Any]:
         "draw_ui_integration": {
             "source": "multi-agent-dev-workflow/integrations/draw-ui",
             "integration_mode": "internal-capability",
-            "current_capability": "image-to-html reconstruction and screenshot comparison",
+            "current_capability": "image-to-html reconstruction, native UI adapter handoff, and screenshot comparison",
             "workflow_commands": [
                 [
                     "python3",
@@ -1640,6 +1641,34 @@ def ui_replication_dry_run_plan() -> dict[str, Any]:
                     "artifacts/design/generated/primary-ui.png",
                     "--out-dir",
                     "artifacts/validation/ui-html/primary-ui",
+                ],
+                [
+                    "python3",
+                    "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                    "adapt-ui-native",
+                    "--run-dir",
+                    ".agent-workflows/dev/<run-id>",
+                    "--target",
+                    "flutter",
+                    "--html",
+                    "artifacts/implementation/html/primary-ui.html",
+                    "--reference",
+                    "artifacts/design/generated/primary-ui.png",
+                    "--code-file",
+                    "<native-ui-code-file>",
+                ],
+                [
+                    "python3",
+                    "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                    "verify-native-ui",
+                    "--run-dir",
+                    ".agent-workflows/dev/<run-id>",
+                    "--target",
+                    "flutter",
+                    "--reference",
+                    "artifacts/design/generated/primary-ui.png",
+                    "--candidate-screenshot",
+                    "<rendered-native-ui-screenshot>",
                 ],
             ],
             "target_replication_paths": [
@@ -2629,6 +2658,282 @@ def verify_ui_html(args: argparse.Namespace) -> None:
     print(f"verification={manifest_path}")
 
 
+def native_output_extension(target: str) -> str:
+    return {
+        "flutter": ".dart",
+        "android": ".kt",
+        "ios": ".swift",
+    }[target]
+
+
+def native_adapter_prompt(
+    *,
+    target: str,
+    html: str,
+    reference: str,
+    output: str,
+    notes: str,
+) -> str:
+    notes_block = notes.strip() or "No extra notes."
+    target_label = {
+        "flutter": "Flutter Widget code",
+        "android": "Android native UI code",
+        "ios": "iOS native UI code",
+    }[target]
+    return f"""# Native UI Adapter Prompt
+
+Status: pending
+
+## Objective
+
+Convert the reconstructed HTML UI into {target_label}.
+
+## Inputs
+
+- Target platform: `{target}`
+- Source HTML: `{html}`
+- Reference image: `{reference or 'None'}`
+- Target output: `{output}`
+
+## Requirements
+
+- Preserve the visual hierarchy, spacing, typography intent, and state coverage from the HTML and reference image.
+- Use idiomatic platform primitives for layout, text, controls, and reusable components.
+- Keep generated code scoped to the workflow artifact unless a later code-write approval names target product files.
+- Do not install dependencies, run platform builds, or write product code from this adapter step.
+- After code is rendered by the target platform, capture a screenshot and run `verify-native-ui`.
+
+## Notes
+
+{notes_block}
+
+## Expected Output
+
+Write complete {target_label} to `{output}`.
+"""
+
+
+def adapt_ui_native(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if args.target not in NATIVE_UI_TARGETS:
+        raise SystemExit(f"--target must be one of: {', '.join(sorted(NATIVE_UI_TARGETS))}")
+    if state.get("current_phase") not in {"ui_replication", "ui_replication_approval", "business_logic"} and not args.force:
+        raise SystemExit(
+            "Native UI adaptation should run during or after ui_replication planning. "
+            f"Current phase is {state.get('current_phase')!r}; use --force for controlled local tests."
+        )
+
+    html_path = resolve_path(args.html, run_dir)
+    if not html_path.exists():
+        raise SystemExit(f"HTML file not found: {html_path}")
+    reference_path = resolve_path(args.reference, run_dir) if args.reference else None
+    if reference_path and not reference_path.exists():
+        raise SystemExit(f"Reference image not found: {reference_path}")
+
+    name = slugify(args.name or html_path.stem, fallback=f"{args.target}-ui")
+    output_arg = args.output or f"artifacts/implementation/{args.target}/{name}{native_output_extension(args.target)}"
+    output_path = resolve_path(output_arg, run_dir)
+    prompt_path = resolve_path(
+        args.prompt_output or f"artifacts/implementation/{args.target}/{name}.adapter-prompt.md",
+        run_dir,
+    )
+    manifest_path = resolve_path(
+        args.manifest_output or f"artifacts/implementation/{args.target}/{name}.adapter.json",
+        run_dir,
+    )
+    code = read_text_arg(file=args.code_file, content=args.code, label="code")
+    notes = read_text_arg(file=args.notes_file, content=args.notes, label="notes")
+    prompt = native_adapter_prompt(
+        target=args.target,
+        html=display_path(html_path, run_dir),
+        reference=display_path(reference_path, run_dir) if reference_path else "",
+        output=display_path(output_path, run_dir),
+        notes=notes,
+    )
+    write_text(prompt_path, prompt)
+
+    status = "pending_code"
+    if code:
+        write_text(output_path, code)
+        status = "success"
+    elif args.require_code:
+        raise SystemExit("Provide --code-file or --code when --require-code is set.")
+
+    manifest = {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "target": args.target,
+        "name": name,
+        "status": status,
+        "html": display_path(html_path, run_dir),
+        "reference": display_path(reference_path, run_dir) if reference_path else None,
+        "output": display_path(output_path, run_dir),
+        "prompt": display_path(prompt_path, run_dir),
+        "notes": notes,
+        "execution_note": (
+            "Native UI artifact was recorded from provided code."
+            if code
+            else "No native code artifact was provided. Prompt package is ready for a human or subagent."
+        ),
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    node_key = f"draw_ui_{args.target}_adapter"
+    node = state.setdefault("nodes", {}).setdefault(node_key, {})
+    node.update(
+        {
+            "status": status,
+            "artifact": display_path(output_path, run_dir) if code else display_path(prompt_path, run_dir),
+            "manifest": display_path(manifest_path, run_dir),
+            "html": display_path(html_path, run_dir),
+            "reference": display_path(reference_path, run_dir) if reference_path else None,
+            "finished_at": utc_now(),
+        }
+    )
+    if not node.get("started_at"):
+        node["started_at"] = node["finished_at"]
+    state.setdefault("artifacts", {}).setdefault("ui_replication_outputs", []).append(display_path(manifest_path, run_dir))
+    if code:
+        state.setdefault("artifacts", {}).setdefault("ui_replication_outputs", []).append(display_path(output_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running" if code else "partial"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_native_adapter_recorded",
+        target=args.target,
+        status=status,
+        html=display_path(html_path, run_dir),
+        output=display_path(output_path, run_dir) if code else None,
+        manifest=display_path(manifest_path, run_dir),
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(prompt_path, run_dir))
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    if code:
+        append_event(run_dir, "artifact_written", artifact=display_path(output_path, run_dir))
+    write_index(run_dir, state)
+    print(f"adapter_status={status}")
+    print(f"manifest={manifest_path}")
+    if code:
+        print(f"output={output_path}")
+
+
+def verify_native_ui(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if args.target not in NATIVE_UI_TARGETS:
+        raise SystemExit(f"--target must be one of: {', '.join(sorted(NATIVE_UI_TARGETS))}")
+    reference_path = resolve_path(args.reference, run_dir)
+    candidate_path = resolve_path(args.candidate_screenshot, run_dir)
+    if not reference_path.exists():
+        raise SystemExit(f"Reference image not found: {reference_path}")
+    if not candidate_path.exists():
+        raise SystemExit(f"Candidate screenshot not found: {candidate_path}")
+
+    name = slugify(args.name or f"{args.target}-{candidate_path.stem}", fallback=f"{args.target}-ui")
+    out_dir = resolve_path(args.out_dir or f"artifacts/validation/{args.target}/{name}", run_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "python3",
+        str(DRAW_UI_COMPARE_SCRIPT),
+        "--reference",
+        str(reference_path),
+        "--candidate",
+        str(candidate_path),
+        "--out-dir",
+        str(out_dir),
+        "--prefix",
+        args.prefix,
+    ]
+    for clip in args.clip or []:
+        command.extend(["--clip", clip])
+
+    node_key = f"draw_ui_{args.target}_verification"
+    node = state.setdefault("nodes", {}).setdefault(node_key, {})
+    node.update(
+        {
+            "status": "running",
+            "artifact": display_path(out_dir, run_dir),
+            "reference": display_path(reference_path, run_dir),
+            "candidate": display_path(candidate_path, run_dir),
+            "started_at": utc_now(),
+            "finished_at": None,
+        }
+    )
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_native_verification_started",
+        target=args.target,
+        reference=display_path(reference_path, run_dir),
+        candidate=display_path(candidate_path, run_dir),
+        out_dir=display_path(out_dir, run_dir),
+    )
+
+    try:
+        completed = subprocess.run(command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        node["status"] = "failed"
+        node["finished_at"] = utc_now()
+        node["error"] = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+        state["status"] = "partial"
+        save_state(run_dir, state)
+        append_event(
+            run_dir,
+            "draw_ui_native_verification_failed",
+            target=args.target,
+            reference=display_path(reference_path, run_dir),
+            candidate=display_path(candidate_path, run_dir),
+            returncode=exc.returncode,
+        )
+        raise SystemExit(node["error"]) from exc
+
+    metrics_path = out_dir / f"{args.prefix}-metrics.json"
+    manifest_path = out_dir / "verification.json"
+    manifest = {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "target": args.target,
+        "status": "success",
+        "reference": display_path(reference_path, run_dir),
+        "candidate": display_path(candidate_path, run_dir),
+        "out_dir": display_path(out_dir, run_dir),
+        "metrics": display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+        "command": command,
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+    node.update(
+        {
+            "status": "success",
+            "artifact": display_path(manifest_path, run_dir),
+            "metrics": display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+            "finished_at": utc_now(),
+        }
+    )
+    state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(manifest_path, run_dir))
+    if metrics_path.exists():
+        state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(metrics_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_native_verification_completed",
+        target=args.target,
+        reference=display_path(reference_path, run_dir),
+        candidate=display_path(candidate_path, run_dir),
+        manifest=display_path(manifest_path, run_dir),
+        metrics=display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    if metrics_path.exists():
+        append_event(run_dir, "artifact_written", artifact=display_path(metrics_path, run_dir))
+    write_index(run_dir, state)
+    print(completed.stdout.strip())
+    print(f"verification={manifest_path}")
+
+
 def resume_run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     decision = args.decision.lower()
@@ -2859,6 +3164,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Named crop to compare, format name:x,y,w,h. Repeatable.",
     )
 
+    adapt_native = subparsers.add_parser(
+        "adapt-ui-native", help="Record or prepare native UI code from reconstructed HTML."
+    )
+    adapt_native.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    adapt_native.add_argument("--target", required=True, choices=sorted(NATIVE_UI_TARGETS))
+    adapt_native.add_argument("--html", required=True, help="Source HTML artifact path.")
+    adapt_native.add_argument("--reference", help="Reference mockup/screenshot path.")
+    adapt_native.add_argument("--name", help="Stable name for output artifacts.")
+    adapt_native.add_argument("--output", help="Native code output path, relative to run dir unless absolute.")
+    adapt_native.add_argument("--code-file", help="Existing native code file to record.")
+    adapt_native.add_argument("--code", help="Inline native code content.")
+    adapt_native.add_argument("--notes-file", help="Markdown notes for the native adapter agent.")
+    adapt_native.add_argument("--notes", help="Inline notes for the native adapter agent.")
+    adapt_native.add_argument("--prompt-output", help="Prompt artifact path.")
+    adapt_native.add_argument("--manifest-output", help="Manifest artifact path.")
+    adapt_native.add_argument(
+        "--require-code",
+        action="store_true",
+        help="Fail unless --code-file or --code is provided.",
+    )
+    adapt_native.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow controlled local tests outside the ui_replication phase.",
+    )
+
+    verify_native = subparsers.add_parser(
+        "verify-native-ui", help="Compare a platform-rendered native UI screenshot against a reference image."
+    )
+    verify_native.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    verify_native.add_argument("--target", required=True, choices=sorted(NATIVE_UI_TARGETS))
+    verify_native.add_argument("--reference", required=True, help="Reference mockup/screenshot path.")
+    verify_native.add_argument("--candidate-screenshot", required=True, help="Rendered native UI screenshot path.")
+    verify_native.add_argument("--name", help="Stable name for validation output.")
+    verify_native.add_argument("--out-dir", help="Validation output directory.")
+    verify_native.add_argument("--prefix", default="verify", help="Output filename prefix for comparison artifacts.")
+    verify_native.add_argument(
+        "--clip",
+        action="append",
+        default=[],
+        help="Named crop to compare, format name:x,y,w,h. Repeatable.",
+    )
+
     resume = subparsers.add_parser("resume", help="Record an approval decision.")
     resume.add_argument("--run-dir", required=True, help="Workflow run directory.")
     resume.add_argument("--approval", required=True, help="Approval id.")
@@ -2930,6 +3278,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "verify-ui-html":
         verify_ui_html(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "adapt-ui-native":
+        adapt_ui_native(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "verify-native-ui":
+        verify_native_ui(args)
         print_status(Path(args.run_dir))
         return 0
     if args.command == "resume":

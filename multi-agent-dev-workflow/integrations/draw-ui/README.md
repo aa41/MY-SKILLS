@@ -55,6 +55,29 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
 
 If no HTML is ready yet, run `replicate-ui-html` without `--html-file` to create a prompt package for a human or subagent. If `agent-browser` is unavailable, use `verify-ui-html --candidate-screenshot` with an existing browser screenshot.
 
+For native UI handoff, use:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py adapt-ui-native \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --html artifacts/implementation/html/dashboard.html \
+  --reference artifacts/design/generated/dashboard.png \
+  --code-file /tmp/dashboard.dart
+```
+
+Then compare a platform-rendered screenshot:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-native-ui \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --reference artifacts/design/generated/dashboard.png \
+  --candidate-screenshot /tmp/flutter-dashboard.png
+```
+
+Supported targets are `flutter`, `android`, and `ios`. These commands record handoff artifacts and visual evidence; they do not run platform builds or mutate product code.
+
 The workflow may trigger this capability for requests like:
 
 > 帮我设计一个 Dashboard 页面  

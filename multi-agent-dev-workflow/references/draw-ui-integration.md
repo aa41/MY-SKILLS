@@ -46,6 +46,9 @@ Design generation writes:
 UI replication consumes generated images and writes:
 
 - `artifacts/implementation/html/`
+- `artifacts/implementation/flutter/`
+- `artifacts/implementation/android/`
+- `artifacts/implementation/ios/`
 - `artifacts/validation/`
 
 HTML reconstruction is runner-managed:
@@ -73,25 +76,43 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
 
 When `agent-browser` is unavailable, pass `--candidate-screenshot` to compare an existing browser screenshot through `compare_mockup.py`.
 
-## Target Replication Roadmap
+Native UI adapters are runner-managed handoff nodes:
 
-Current implementation target:
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py adapt-ui-native \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --html artifacts/implementation/html/primary-ui.html \
+  --reference artifacts/design/generated/primary-ui.png \
+  --code-file /tmp/primary-ui.dart
+```
+
+If `--code-file` or `--code` is omitted, the command writes a platform adapter prompt package and manifest with `pending_code` status. A human or subagent can then produce the native UI code and rerun the command with the code artifact.
+
+Native UI verification compares a platform-rendered screenshot to the same reference:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-native-ui \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --reference artifacts/design/generated/primary-ui.png \
+  --candidate-screenshot /tmp/flutter-primary-ui.png
+```
+
+## Target Replication Scope
+
+Current implementation targets:
 
 - image or screenshot to HTML/CSS
-
-Planned adapters:
-
 - HTML to Flutter UI
 - HTML to Android native UI
 - HTML to iOS native UI
 
-These adapters should be separate workflow nodes with their own artifacts, validation plans, and approval gates. They should not be hidden inside image generation.
+These adapters are separate workflow nodes with their own artifacts and validation evidence. They do not install dependencies, run platform builds, mutate product code, or capture device screenshots by themselves.
 
 ## Verification
 
-HTML verification uses:
+Verification uses:
 
 - `multi-agent-dev-workflow/integrations/draw-ui/scripts/verify_html_mockup.sh`
 - `multi-agent-dev-workflow/integrations/draw-ui/scripts/compare_mockup.py`
-
-Future native UI verification should add platform-specific screenshot capture and compare against the same reference mockups.

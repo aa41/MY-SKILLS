@@ -116,6 +116,27 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
   --viewport 1024x1536
 ```
 
+Prepare or record native UI code from reconstructed HTML:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py adapt-ui-native \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --html artifacts/implementation/html/primary-ui.html \
+  --reference artifacts/design/generated/primary-ui.png \
+  --code-file /tmp/primary-ui.dart
+```
+
+Verify a platform-rendered native UI screenshot:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-native-ui \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --target flutter \
+  --reference artifacts/design/generated/primary-ui.png \
+  --candidate-screenshot /tmp/flutter-primary-ui.png
+```
+
 Record a UI replication role output:
 
 ```bash
