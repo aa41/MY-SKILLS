@@ -162,6 +162,26 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-business-logi
   --file /tmp/logic-implementation-plan.md
 ```
 
+Record implementation evidence after approved code changes:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-implementation \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --name checkout-logic \
+  --summary-file /tmp/implementation-summary.md \
+  --touched-file lib/checkout/service.dart
+```
+
+Run an explicit local self-test command and save evidence:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py run-self-test \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --name unit-tests \
+  --cwd /path/to/project \
+  -- dart test
+```
+
 Start final acceptance after business logic approval:
 
 ```bash

@@ -110,6 +110,32 @@ When all three business logic roles have `success` status and the dry-run plan e
 - approving `approval-business-logic-001` moves the run to `ready` / `acceptance`
 - rejecting `approval-business-logic-001` moves the run to `cancelled` / `business_logic_approval_rejected`
 
+## Implementation Evidence and Self-Test Execution
+
+After `approval-business-logic-001` is approved, implementation evidence can be recorded with:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-implementation \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --name <implementation-name> \
+  --summary-file <summary.md> \
+  --touched-file <path>
+```
+
+This writes an implementation manifest under `artifacts/implementation/`, updates `state.json`, and appends events. If no summary, touched files, or patch evidence are provided, it creates a prompt package with `pending_implementation` status.
+
+Self-tests are explicit commands only:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py run-self-test \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --name <test-name> \
+  --cwd <project-root> \
+  -- <test-command>
+```
+
+The runner stores stdout, stderr, return code, and a manifest under `artifacts/validation/self-tests/`. It does not install dependencies, rewrite tests, run migrations, or call external services unless the provided command does so under a separate approval.
+
 ## Acceptance Phase
 
 `start-acceptance` creates prompts and artifact placeholders for three roles:
@@ -133,7 +159,7 @@ When all three acceptance roles have `success` status and the dry-run plan exist
 
 ## Deferred Nodes
 
-The MVP deliberately does not execute subagents, image generation API calls, UI replication implementation, business logic implementation, code writes, tests, or external sync. It only scaffolds prompts/artifacts and records outputs. Add execution as explicit nodes with:
+The MVP deliberately does not execute subagents, install dependencies, run migrations, deploy, or perform external sync. Image generation, UI replication handoff, implementation evidence, and self-test evidence are explicit workflow nodes with:
 
 - input artifact paths
 - output artifact paths

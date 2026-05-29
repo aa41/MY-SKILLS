@@ -10,6 +10,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1809,7 +1810,35 @@ def business_logic_dry_run_plan() -> dict[str, Any]:
         "planned_outputs": [
             "artifacts/implementation/03-logic-contract-map.md",
             "artifacts/implementation/04-logic-implementation-plan.md",
+            "artifacts/implementation/*.implementation.json",
             "artifacts/validation/02-logic-test-plan.md",
+            "artifacts/validation/self-tests/",
+        ],
+        "workflow_commands": [
+            [
+                "python3",
+                "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                "record-implementation",
+                "--run-dir",
+                ".agent-workflows/dev/<run-id>",
+                "--name",
+                "<implementation-name>",
+                "--summary-file",
+                "<implementation-summary.md>",
+                "--touched-file",
+                "<path>",
+            ],
+            [
+                "python3",
+                "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                "run-self-test",
+                "--run-dir",
+                ".agent-workflows/dev/<run-id>",
+                "--name",
+                "<test-name>",
+                "--",
+                "<test-command>",
+            ],
         ],
         "approval_required_for": [
             "code_write",
@@ -2934,6 +2963,207 @@ def verify_native_ui(args: argparse.Namespace) -> None:
     print(f"verification={manifest_path}")
 
 
+def implementation_prompt(*, name: str, output: str, notes: str) -> str:
+    notes_block = notes.strip() or "No extra notes."
+    return f"""# Implementation Evidence Prompt
+
+Status: pending
+
+## Objective
+
+Implement the approved business logic or UI integration work and record the resulting evidence.
+
+## Inputs
+
+- Implementation name: `{name}`
+- Evidence manifest: `{output}`
+- Approved plans:
+  - `artifacts/implementation/04-logic-implementation-plan.md`
+  - `artifacts/validation/02-logic-test-plan.md`
+
+## Requirements
+
+- Only modify product code after the relevant approval is granted.
+- Keep changes scoped to the approved plan.
+- Record touched files, patch summary, risks, and test evidence.
+- Do not install dependencies, run migrations, call external systems, or lower assertions unless separately approved.
+
+## Notes
+
+{notes_block}
+
+## Expected Output
+
+Run `record-implementation` again with `--summary` or `--summary-file`, touched files, and optional patch evidence after implementation.
+"""
+
+
+def record_implementation(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if approval_status(state, BUSINESS_LOGIC_APPROVAL_ID) != "approved" and not args.force:
+        raise SystemExit(
+            f"Implementation evidence requires approved {BUSINESS_LOGIC_APPROVAL_ID}. "
+            "Use --force only for controlled local smoke runs."
+        )
+
+    name = slugify(args.name or "implementation", fallback="implementation")
+    manifest_path = resolve_path(args.manifest_output or f"artifacts/implementation/{name}.implementation.json", run_dir)
+    prompt_path = resolve_path(args.prompt_output or f"artifacts/implementation/{name}.implementation-prompt.md", run_dir)
+    summary = read_text_arg(file=args.summary_file, content=args.summary, label="summary")
+    notes = read_text_arg(file=args.notes_file, content=args.notes, label="notes")
+    patch_text = read_text_arg(file=args.patch_file, content=args.patch, label="patch")
+    touched_files = args.touched_file or []
+
+    prompt = implementation_prompt(
+        name=name,
+        output=display_path(manifest_path, run_dir),
+        notes=notes,
+    )
+    write_text(prompt_path, prompt)
+
+    status = "success" if summary or touched_files or patch_text else "pending_implementation"
+    if args.require_summary and not summary:
+        raise SystemExit("Provide --summary-file or --summary when --require-summary is set.")
+
+    patch_path = None
+    if patch_text:
+        patch_path = resolve_path(args.patch_output or f"artifacts/implementation/{name}.patch", run_dir)
+        write_text(patch_path, patch_text)
+
+    manifest = {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "name": name,
+        "status": status,
+        "summary": summary,
+        "touched_files": touched_files,
+        "patch": display_path(patch_path, run_dir) if patch_path else None,
+        "prompt": display_path(prompt_path, run_dir),
+        "notes": notes,
+        "execution_note": (
+            "Implementation evidence was recorded from provided summary/files."
+            if status == "success"
+            else "No implementation evidence was provided. Prompt package is ready for a human or subagent."
+        ),
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    node = state.setdefault("nodes", {}).setdefault("implementation_evidence", {})
+    node.update(
+        {
+            "status": status,
+            "artifact": display_path(manifest_path, run_dir),
+            "prompt": display_path(prompt_path, run_dir),
+            "finished_at": utc_now(),
+        }
+    )
+    if not node.get("started_at"):
+        node["started_at"] = node["finished_at"]
+    state.setdefault("artifacts", {}).setdefault("implementation_outputs", []).append(display_path(manifest_path, run_dir))
+    if patch_path:
+        state.setdefault("artifacts", {}).setdefault("implementation_outputs", []).append(display_path(patch_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running" if status == "success" else "partial"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "implementation_evidence_recorded",
+        status=status,
+        manifest=display_path(manifest_path, run_dir),
+        touched_files=touched_files,
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(prompt_path, run_dir))
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    if patch_path:
+        append_event(run_dir, "artifact_written", artifact=display_path(patch_path, run_dir))
+    write_index(run_dir, state)
+    print(f"implementation_status={status}")
+    print(f"manifest={manifest_path}")
+
+
+def run_self_test(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if approval_status(state, BUSINESS_LOGIC_APPROVAL_ID) != "approved" and not args.force:
+        raise SystemExit(
+            f"Self-test execution requires approved {BUSINESS_LOGIC_APPROVAL_ID}. "
+            "Use --force only for controlled local smoke runs."
+        )
+    if not args.test_command:
+        raise SystemExit("Provide at least one command token after --.")
+
+    name = slugify(args.name or args.test_command[0], fallback="self-test")
+    out_dir = resolve_path(args.out_dir or f"artifacts/validation/self-tests/{name}", run_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = out_dir / "stdout.txt"
+    stderr_path = out_dir / "stderr.txt"
+    manifest_path = out_dir / "self-test.json"
+    started = utc_now()
+    append_event(run_dir, "self_test_started", name=name, command=args.test_command, cwd=args.cwd or ".")
+
+    cwd = resolve_path(args.cwd, run_dir) if args.cwd else Path.cwd()
+    completed = subprocess.run(
+        args.test_command,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=args.timeout,
+    )
+    stdout_path.write_text(completed.stdout, encoding="utf-8")
+    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    status = "success" if completed.returncode == 0 else "failed"
+    manifest = {
+        "version": "0.1.0",
+        "created_at": started,
+        "finished_at": utc_now(),
+        "name": name,
+        "status": status,
+        "command": args.test_command,
+        "cwd": str(cwd),
+        "returncode": completed.returncode,
+        "stdout": display_path(stdout_path, run_dir),
+        "stderr": display_path(stderr_path, run_dir),
+        "approval": BUSINESS_LOGIC_APPROVAL_ID,
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    node = state.setdefault("nodes", {}).setdefault("self_test_execution", {})
+    node.update(
+        {
+            "status": status,
+            "artifact": display_path(manifest_path, run_dir),
+            "finished_at": utc_now(),
+            "returncode": completed.returncode,
+        }
+    )
+    if not node.get("started_at"):
+        node["started_at"] = started
+    state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(manifest_path, run_dir))
+    state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(stdout_path, run_dir))
+    state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(stderr_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running" if status == "success" else "partial"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "self_test_completed",
+        name=name,
+        status=status,
+        returncode=completed.returncode,
+        manifest=display_path(manifest_path, run_dir),
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    append_event(run_dir, "artifact_written", artifact=display_path(stdout_path, run_dir))
+    append_event(run_dir, "artifact_written", artifact=display_path(stderr_path, run_dir))
+    write_index(run_dir, state)
+    print(f"self_test_status={status}")
+    print(f"returncode={completed.returncode}")
+    print(f"manifest={manifest_path}")
+    if completed.returncode != 0 and not args.allow_failure:
+        sys.exit(completed.returncode)
+
+
 def resume_run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     decision = args.decision.lower()
@@ -3207,6 +3437,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Named crop to compare, format name:x,y,w,h. Repeatable.",
     )
 
+    record_impl = subparsers.add_parser(
+        "record-implementation", help="Record implementation evidence after approved code changes."
+    )
+    record_impl.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    record_impl.add_argument("--name", help="Stable implementation evidence name.")
+    record_impl.add_argument("--summary-file", help="Markdown summary of implementation changes.")
+    record_impl.add_argument("--summary", help="Inline summary of implementation changes.")
+    record_impl.add_argument("--touched-file", action="append", default=[], help="Touched product file path.")
+    record_impl.add_argument("--patch-file", help="Patch evidence file.")
+    record_impl.add_argument("--patch", help="Inline patch evidence.")
+    record_impl.add_argument("--patch-output", help="Patch artifact output path.")
+    record_impl.add_argument("--notes-file", help="Markdown notes for implementer handoff.")
+    record_impl.add_argument("--notes", help="Inline notes for implementer handoff.")
+    record_impl.add_argument("--prompt-output", help="Prompt artifact path.")
+    record_impl.add_argument("--manifest-output", help="Manifest artifact path.")
+    record_impl.add_argument("--require-summary", action="store_true", help="Fail unless summary evidence is provided.")
+    record_impl.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass business-logic approval requirement for controlled local smoke runs.",
+    )
+
+    self_test = subparsers.add_parser(
+        "run-self-test", help="Run an explicit local self-test command and record evidence."
+    )
+    self_test.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    self_test.add_argument("--name", help="Stable self-test evidence name.")
+    self_test.add_argument("--cwd", help="Command working directory, relative to run dir unless absolute.")
+    self_test.add_argument("--out-dir", help="Validation output directory.")
+    self_test.add_argument("--timeout", type=int, default=300, help="Command timeout in seconds.")
+    self_test.add_argument("--allow-failure", action="store_true", help="Record failed command without exiting non-zero.")
+    self_test.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass business-logic approval requirement for controlled local smoke runs.",
+    )
+    self_test.add_argument("test_command", nargs=argparse.REMAINDER, help="Command to run after --.")
+
     resume = subparsers.add_parser("resume", help="Record an approval decision.")
     resume.add_argument("--run-dir", required=True, help="Workflow run directory.")
     resume.add_argument("--approval", required=True, help="Approval id.")
@@ -3286,6 +3554,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "verify-native-ui":
         verify_native_ui(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "record-implementation":
+        record_implementation(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "run-self-test":
+        if args.test_command and args.test_command[0] == "--":
+            args.test_command = args.test_command[1:]
+        run_self_test(args)
         print_status(Path(args.run_dir))
         return 0
     if args.command == "resume":
