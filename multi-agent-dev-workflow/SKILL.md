@@ -13,7 +13,7 @@ The first implementation is intentionally narrow:
 
 - Create a repo-local development workflow run directory.
 - Persist `requirement.md`, `workflow.yaml`, `state.json`, `events.jsonl`, approval artifacts, docs placeholders, logs, and lockfiles.
-- Support `run`, `status`, `resume`, `start-docs`, `record`, `start-design`, `record-design`, `start-ui-replication`, `record-ui-replication`, `start-business-logic`, and `record-business-logic` commands.
+- Support `run`, `status`, `resume`, `start-docs`, `record`, `start-design`, `record-design`, `start-ui-replication`, `record-ui-replication`, `start-business-logic`, `record-business-logic`, `start-acceptance`, and `record-acceptance` commands.
 - Keep all high-impact actions behind explicit approval gates.
 
 It does not directly edit business code, install dependencies, call external systems, generate images, update visual baselines, or deploy. Those capabilities must be added later as explicit workflow nodes with manifest permissions and approval boundaries.
@@ -109,6 +109,22 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-business-logi
   --file /tmp/logic-implementation-plan.md
 ```
 
+Start final acceptance after business logic approval:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py start-acceptance \
+  --run-dir .agent-workflows/dev/<run-id>
+```
+
+Record an acceptance role output:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-acceptance \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --role final-acceptance-reporter \
+  --file /tmp/final-acceptance-report.md
+```
+
 ## Run Directory
 
 ```text
@@ -170,6 +186,10 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-business-logi
           01-ui-validation-plan.md
           02-logic-test-plan.md
         acceptance/
+          01-acceptance-matrix.md
+          02-evidence-completeness-review.md
+          03-final-acceptance-report.md
+          acceptance-dry-run-plan.json
       manifests/
         skills.lock
         subagents.lock
@@ -199,6 +219,7 @@ Implemented:
 - Phase 3 design generation planning with imagegen dry-run artifacts.
 - Phase 4 UI replication planning with code-write approval gate.
 - Phase 5 business logic planning with implementation/testing approval gate.
+- Phase 6 final acceptance planning, evidence review, and completion gate.
 - Independent imagegen provider config for OpenAI-compatible APIs, relay/gateway services, Gemini placeholders, and custom HTTP providers.
 - Local state and event ledger.
 - Initial scope approval gate.
@@ -207,6 +228,7 @@ Implemented:
 - Design role output recording and imagegen approval gate creation.
 - UI replication role output recording and code-write approval gate creation.
 - Business logic role output recording and implementation/testing approval gate creation.
+- Acceptance role output recording and final acceptance completion gate creation.
 - JSON schema artifacts for state, events, and skill manifests.
 
 ## Image Generation Config

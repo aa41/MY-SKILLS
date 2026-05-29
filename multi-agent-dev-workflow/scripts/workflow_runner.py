@@ -18,6 +18,7 @@ DOCS_APPROVAL_ID = "approval-docs-001"
 IMAGEGEN_APPROVAL_ID = "approval-imagegen-001"
 UI_REPLICATION_APPROVAL_ID = "approval-ui-replication-001"
 BUSINESS_LOGIC_APPROVAL_ID = "approval-business-logic-001"
+ACCEPTANCE_APPROVAL_ID = "approval-acceptance-001"
 TERMINAL_APPROVAL_DECISIONS = {"approve", "reject"}
 
 DOC_ROLE_DEFINITIONS = [
@@ -291,6 +292,60 @@ Focus on:
 - Evidence required before final acceptance.
 
 Do not run tests or change assertions. Write a complete logic test plan.
+""",
+    },
+]
+
+ACCEPTANCE_ROLE_DEFINITIONS = [
+    {
+        "id": "acceptance-matrix-author",
+        "title": "Acceptance Matrix Author",
+        "phase": "acceptance",
+        "artifact": "artifacts/acceptance/01-acceptance-matrix.md",
+        "prompt": """You are the Acceptance Matrix Author.
+
+Read `requirement.md`, docs under `docs/`, implementation plans under `artifacts/implementation/`, and validation plans under `artifacts/validation/`.
+
+Focus on:
+- Requirement-to-evidence traceability.
+- Acceptance criteria, expected evidence, owners, blockers, and manual review points.
+- Gaps that prevent final acceptance.
+
+Do not edit product code or mark work complete without evidence. Write a complete acceptance matrix.
+""",
+    },
+    {
+        "id": "evidence-completeness-reviewer",
+        "title": "Evidence Completeness Reviewer",
+        "phase": "acceptance",
+        "artifact": "artifacts/acceptance/02-evidence-completeness-review.md",
+        "prompt": """You are the Evidence Completeness Reviewer.
+
+Audit the workflow artifacts, plans, approvals, and event ledger.
+
+Focus on:
+- Missing evidence, unsupported completion claims, failed/partial nodes, unresolved approvals, and test gaps.
+- Whether the workflow can be accepted as complete or must return to an earlier phase.
+- Residual risks that must be carried forward.
+
+Do not edit product code. Write a complete evidence review.
+""",
+    },
+    {
+        "id": "final-acceptance-reporter",
+        "title": "Final Acceptance Reporter",
+        "phase": "acceptance",
+        "artifact": "artifacts/acceptance/03-final-acceptance-report.md",
+        "prompt": """You are the Final Acceptance Reporter.
+
+Read the acceptance matrix and evidence completeness review.
+
+Focus on:
+- Final status recommendation, accepted scope, rejected/deferred scope, known risks, and next release/workflow steps.
+- A concise summary suitable for human sign-off.
+- Clear recommendation: approve, reject, or return to a previous phase.
+
+Do not edit product code. Write a final acceptance report.
 """,
     },
 ]
@@ -601,6 +656,13 @@ def business_logic_role_by_id(role_id: str) -> dict[str, str]:
     raise SystemExit(f"Unknown business logic role id: {role_id}")
 
 
+def acceptance_role_by_id(role_id: str) -> dict[str, str]:
+    for role in ACCEPTANCE_ROLE_DEFINITIONS:
+        if role["id"] == role_id:
+            return role
+    raise SystemExit(f"Unknown acceptance role id: {role_id}")
+
+
 def artifact_header(role: dict[str, str]) -> str:
     return f"""# {role['title']}
 
@@ -662,6 +724,17 @@ Artifact persistence:
 - Do not edit product code.
 - Do not install dependencies, run migrations, call external systems, or change tests.
 - Preserve assumptions, business rules, target file candidates, approval boundaries, evidence requirements, and unresolved questions.
+"""
+
+
+def acceptance_role_prompt(role: dict[str, str]) -> str:
+    return f"""{role['prompt'].strip()}
+
+Artifact persistence:
+- Write your final output as complete Markdown suitable for `{role['artifact']}`.
+- Start with `Status: success`, `Status: partial`, or `Status: failed`.
+- Do not edit product code, mutate tests, update baselines, deploy, or write external systems.
+- Preserve evidence links, unresolved risks, rejected assumptions, and final sign-off recommendation.
 """
 
 
@@ -880,6 +953,44 @@ Pending.
 """
 
 
+def acceptance_approval_doc(approval_id: str) -> str:
+    return f"""# Final Acceptance Approval
+
+- Approval ID: `{approval_id}`
+- Phase: `final_acceptance`
+- Status: `pending`
+- Created: `{utc_now()}`
+
+## Request
+
+Approve final workflow acceptance and mark the run complete.
+
+## Required Artifacts
+
+- `docs/acceptance.md`
+- `artifacts/acceptance/01-acceptance-matrix.md`
+- `artifacts/acceptance/02-evidence-completeness-review.md`
+- `artifacts/acceptance/03-final-acceptance-report.md`
+- `artifacts/acceptance/acceptance-dry-run-plan.json`
+- `events.jsonl`
+
+## Approval Boundaries
+
+- `final_acceptance`
+- `deployment`
+- `external_write`
+- `production_data_access`
+
+## Decision
+
+Pending.
+
+## Comment
+
+Pending.
+"""
+
+
 def update_approval_doc(path: Path, decision: str, comment: str) -> None:
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     now = utc_now()
@@ -982,6 +1093,13 @@ def write_index(run_dir: Path, state: dict[str, Any]) -> None:
 
     lines.extend(["", "## Business Logic Roles", ""])
     for role in BUSINESS_LOGIC_ROLE_DEFINITIONS:
+        node = role_nodes.get(role["id"], {})
+        status = node.get("status", "not_started")
+        artifact = role["artifact"]
+        lines.append(f"- `{role['id']}`: `{status}` - [{artifact}]({artifact})")
+
+    lines.extend(["", "## Acceptance Roles", ""])
+    for role in ACCEPTANCE_ROLE_DEFINITIONS:
         node = role_nodes.get(role["id"], {})
         status = node.get("status", "not_started")
         artifact = role["artifact"]
@@ -1602,6 +1720,128 @@ def maybe_create_business_logic_approval(run_dir: Path, state: dict[str, Any]) -
     append_event(run_dir, "approval_requested", approval_id=BUSINESS_LOGIC_APPROVAL_ID)
 
 
+def acceptance_dry_run_plan() -> dict[str, Any]:
+    return {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "mode": "dry-run",
+        "status": "pending_final_acceptance",
+        "planned_inputs": [
+            "requirement.md",
+            "docs/prd.md",
+            "docs/acceptance.md",
+            "artifacts/implementation/",
+            "artifacts/validation/",
+            "events.jsonl",
+            "approvals/",
+        ],
+        "planned_outputs": [
+            "artifacts/acceptance/01-acceptance-matrix.md",
+            "artifacts/acceptance/02-evidence-completeness-review.md",
+            "artifacts/acceptance/03-final-acceptance-report.md",
+            "docs/acceptance.md",
+        ],
+        "approval_required_for": [
+            "final_acceptance",
+            "deployment",
+            "external_write",
+            "production_data_access",
+        ],
+        "execution_note": "No deployment, external write, production data access, or product code change has occurred. This plan only records final acceptance evidence and sign-off requirements.",
+    }
+
+
+def start_acceptance_phase(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir)
+    state = load_state(run_dir)
+    if state["status"] not in {"ready", "running", "partial"} and not args.force:
+        raise SystemExit(
+            f"Run must be ready/running/partial before start-acceptance; current status is {state['status']}."
+        )
+    if state["current_phase"] != "acceptance" and not args.force:
+        raise SystemExit(
+            f"Run must be in acceptance before start-acceptance; current phase is {state['current_phase']}."
+        )
+
+    prompts_dir = run_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    nodes = state.setdefault("nodes", {})
+    now = utc_now()
+
+    for role in ACCEPTANCE_ROLE_DEFINITIONS:
+        write_text(prompts_dir / f"{role['id']}.md", acceptance_role_prompt(role))
+        artifact_path = run_dir / role["artifact"]
+        if not artifact_path.exists() or args.force:
+            write_text(artifact_path, artifact_header(role))
+        nodes[role["id"]] = {
+            "status": "pending",
+            "artifact": role["artifact"],
+            "prompt": f"prompts/{role['id']}.md",
+            "started_at": None,
+            "finished_at": None,
+        }
+        append_event(run_dir, "acceptance_prompt_created", role_id=role["id"], artifact=role["artifact"])
+
+    dry_run_artifact = "artifacts/acceptance/acceptance-dry-run-plan.json"
+    write_text(run_dir / dry_run_artifact, json.dumps(acceptance_dry_run_plan(), ensure_ascii=False, indent=2))
+    nodes["acceptance_dry_run"] = {
+        "status": "success",
+        "artifact": dry_run_artifact,
+        "started_at": now,
+        "finished_at": utc_now(),
+    }
+    state["status"] = "running"
+    state["current_phase"] = "acceptance"
+    state.setdefault("artifacts", {})["acceptance"] = [
+        *(role["artifact"] for role in ACCEPTANCE_ROLE_DEFINITIONS),
+        dry_run_artifact,
+        "docs/acceptance.md",
+    ]
+    state["acceptance_phase_started_at"] = state.get("acceptance_phase_started_at") or now
+    save_state(run_dir, state)
+    append_event(run_dir, "phase_started", phase="acceptance")
+    append_event(run_dir, "artifact_written", artifact=dry_run_artifact, mode="dry-run")
+    write_index(run_dir, state)
+
+
+def maybe_create_acceptance_approval(run_dir: Path, state: dict[str, Any]) -> None:
+    role_statuses = [
+        state.get("nodes", {}).get(role["id"], {}).get("status")
+        for role in ACCEPTANCE_ROLE_DEFINITIONS
+    ]
+    if not role_statuses or any(status != "success" for status in role_statuses):
+        return
+    if state.get("nodes", {}).get("acceptance_dry_run", {}).get("status") != "success":
+        return
+    approvals = state.setdefault("approvals", [])
+    existing = next((item for item in approvals if item.get("id") == ACCEPTANCE_APPROVAL_ID), None)
+    if existing:
+        return
+
+    artifact = f"approvals/{ACCEPTANCE_APPROVAL_ID}.md"
+    approvals.append(
+        {
+            "id": ACCEPTANCE_APPROVAL_ID,
+            "phase": "final_acceptance",
+            "status": "pending",
+            "artifact": artifact,
+            "created_at": utc_now(),
+            "decided_at": None,
+            "decision": None,
+        }
+    )
+    state.setdefault("nodes", {})["final_acceptance"] = {
+        "status": "waiting_for_approval",
+        "artifact": artifact,
+        "started_at": utc_now(),
+        "finished_at": None,
+    }
+    state["status"] = "waiting_for_approval"
+    state["current_phase"] = "final_acceptance"
+    write_text(run_dir / artifact, acceptance_approval_doc(ACCEPTANCE_APPROVAL_ID))
+    append_event(run_dir, "approval_requested", approval_id=ACCEPTANCE_APPROVAL_ID)
+
+
 def record_role_output(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     state = load_state(run_dir)
@@ -1788,6 +2028,59 @@ def record_business_logic_output(args: argparse.Namespace) -> None:
     write_index(run_dir, state)
 
 
+def record_acceptance_output(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir)
+    state = load_state(run_dir)
+    role = acceptance_role_by_id(args.role)
+    output_path = Path(args.file) if args.file else None
+    output = output_path.read_text(encoding="utf-8") if output_path else args.content
+    if not output:
+        raise SystemExit("Provide --file or --content.")
+
+    status = args.status or infer_artifact_status(output)
+    if status not in {"success", "partial", "failed", "timed_out"}:
+        raise SystemExit("--status must be success, partial, failed, or timed_out.")
+
+    artifact_text = output.rstrip()
+    if not re.search(r"(?:^|\n)(?:[-*]\s*)?Status:\s*`?[A-Za-z_-]+`?", artifact_text, re.I):
+        artifact_text = f"Status: {status}\n\n{artifact_text}"
+    write_text(run_dir / role["artifact"], artifact_text)
+
+    if role["id"] == "acceptance-matrix-author":
+        write_text(run_dir / "docs/acceptance.md", artifact_text)
+
+    node = state.setdefault("nodes", {}).setdefault(role["id"], {})
+    node.update(
+        {
+            "status": status,
+            "artifact": role["artifact"],
+            "prompt": f"prompts/{role['id']}.md",
+            "finished_at": utc_now(),
+        }
+    )
+    if not node.get("started_at"):
+        node["started_at"] = node["finished_at"]
+
+    if status == "failed":
+        state["status"] = "partial"
+    elif state["status"] not in {"waiting_for_approval", "cancelled"}:
+        state["status"] = "running"
+    state["current_phase"] = "acceptance"
+
+    append_event(
+        run_dir,
+        "acceptance_output_recorded",
+        role_id=role["id"],
+        status=status,
+        artifact=role["artifact"],
+    )
+    if role["id"] == "acceptance-matrix-author":
+        append_event(run_dir, "artifact_written", artifact="docs/acceptance.md")
+    maybe_create_acceptance_approval(run_dir, state)
+    save_state(run_dir, state)
+    write_index(run_dir, state)
+
+
 def resume_run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     decision = args.decision.lower()
@@ -1829,6 +2122,10 @@ def resume_run(args: argparse.Namespace) -> None:
     elif decision == "approve" and args.approval == BUSINESS_LOGIC_APPROVAL_ID:
         state["status"] = "ready"
         state["current_phase"] = "acceptance"
+    elif decision == "approve" and args.approval == ACCEPTANCE_APPROVAL_ID:
+        state["status"] = "completed"
+        state["current_phase"] = "completed"
+        state["completed_at"] = approval["decided_at"]
     else:
         state["status"] = "cancelled"
         state["current_phase"] = f"{approval.get('phase', 'approval')}_rejected"
@@ -1891,6 +2188,12 @@ def build_parser() -> argparse.ArgumentParser:
     start_business_logic.add_argument("--run-dir", required=True, help="Workflow run directory.")
     start_business_logic.add_argument("--force", action="store_true", help="Overwrite existing prompts/artifacts.")
 
+    start_acceptance = subparsers.add_parser(
+        "start-acceptance", help="Create final acceptance prompts and dry-run artifacts."
+    )
+    start_acceptance.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    start_acceptance.add_argument("--force", action="store_true", help="Overwrite existing prompts/artifacts.")
+
     record = subparsers.add_parser("record", help="Record a research/docs role output.")
     record.add_argument("--run-dir", required=True, help="Workflow run directory.")
     record.add_argument("--role", required=True, help="Role id to record.")
@@ -1922,6 +2225,13 @@ def build_parser() -> argparse.ArgumentParser:
     record_business_logic.add_argument("--file", help="Markdown file containing role output.")
     record_business_logic.add_argument("--content", help="Inline Markdown role output.")
     record_business_logic.add_argument("--status", help="Override inferred status.")
+
+    record_acceptance = subparsers.add_parser("record-acceptance", help="Record an acceptance role output.")
+    record_acceptance.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    record_acceptance.add_argument("--role", required=True, help="Acceptance role id to record.")
+    record_acceptance.add_argument("--file", help="Markdown file containing role output.")
+    record_acceptance.add_argument("--content", help="Inline Markdown role output.")
+    record_acceptance.add_argument("--status", help="Override inferred status.")
 
     resume = subparsers.add_parser("resume", help="Record an approval decision.")
     resume.add_argument("--run-dir", required=True, help="Workflow run directory.")
@@ -1960,6 +2270,10 @@ def main(argv: list[str] | None = None) -> int:
         start_business_logic_phase(args)
         print_status(Path(args.run_dir))
         return 0
+    if args.command == "start-acceptance":
+        start_acceptance_phase(args)
+        print_status(Path(args.run_dir))
+        return 0
     if args.command == "record":
         record_role_output(args)
         print_status(Path(args.run_dir))
@@ -1974,6 +2288,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "record-business-logic":
         record_business_logic_output(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "record-acceptance":
+        record_acceptance_output(args)
         print_status(Path(args.run_dir))
         return 0
     if args.command == "resume":

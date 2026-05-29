@@ -110,6 +110,27 @@ When all three business logic roles have `success` status and the dry-run plan e
 - approving `approval-business-logic-001` moves the run to `ready` / `acceptance`
 - rejecting `approval-business-logic-001` moves the run to `cancelled` / `business_logic_approval_rejected`
 
+## Acceptance Phase
+
+`start-acceptance` creates prompts and artifact placeholders for three roles:
+
+- `acceptance-matrix-author`
+- `evidence-completeness-reviewer`
+- `final-acceptance-reporter`
+
+It also writes:
+
+- `artifacts/acceptance/acceptance-dry-run-plan.json`
+
+No deployment, external write, production data access, product code mutation, test mutation, or baseline update is performed by `start-acceptance`.
+
+Acceptance role outputs are recorded with `record-acceptance`. Recording `acceptance-matrix-author` also updates `docs/acceptance.md`.
+
+When all three acceptance roles have `success` status and the dry-run plan exists, the runner creates `approval-acceptance-001` and moves the run to `waiting_for_approval` / `final_acceptance`.
+
+- approving `approval-acceptance-001` moves the run to `completed` / `completed`
+- rejecting `approval-acceptance-001` moves the run to `cancelled` / `final_acceptance_rejected`
+
 ## Deferred Nodes
 
 The MVP deliberately does not execute subagents, image generation API calls, UI replication implementation, business logic implementation, code writes, tests, or external sync. It only scaffolds prompts/artifacts and records outputs. Add execution as explicit nodes with:
