@@ -421,6 +421,17 @@ def load_imagegen_config_module() -> Any:
     return module
 
 
+def load_workflow_secret_env(run_dir: Path | None = None) -> list[Path]:
+    imagegen_config = load_imagegen_config_module()
+    project_root = None
+    if run_dir:
+        try:
+            project_root = run_dir.resolve().parents[2]
+        except IndexError:
+            project_root = None
+    return imagegen_config.load_default_secret_env(project_root=project_root)
+
+
 def append_event(run_dir: Path, event_type: str, **fields: Any) -> None:
     event = {"ts": utc_now(), "type": event_type, **fields}
     events_path = run_dir / "events.jsonl"
@@ -2305,6 +2316,7 @@ def record_acceptance_output(args: argparse.Namespace) -> None:
 
 def generate_ui_image(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir).resolve()
+    load_workflow_secret_env(run_dir)
     state = load_state(run_dir)
     if approval_status(state, IMAGEGEN_APPROVAL_ID) != "approved" and not args.force:
         raise SystemExit(

@@ -3,6 +3,20 @@
 Image generation is an independent workflow capability. It is configured through JSON provider definitions and can later be bound to a workflow node or skill.
 
 The config stores provider metadata and environment variable names, not secret values.
+Runtime secrets can be loaded from ignored local env files:
+
+```text
+.agent-workflows/secrets/imagegen.env
+.env
+```
+
+Use:
+
+```bash
+OPENAI_API_KEY=sk-your-relay-key
+```
+
+Do not store raw API keys in `imagegen.json`.
 
 ## Files
 

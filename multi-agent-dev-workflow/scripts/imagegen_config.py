@@ -20,6 +20,10 @@ SUPPORTED_PROVIDER_TYPES = {
 DEFAULT_GLOBAL_CONFIG = Path.home() / ".config" / "multi-agent-dev-workflow" / "imagegen.json"
 DEFAULT_PROJECT_CONFIG = Path(".agent-workflows") / "config" / "imagegen.json"
 DEFAULT_RUN_CONFIG = Path("config") / "imagegen.json"
+DEFAULT_SECRET_FILES = (
+    Path(".agent-workflows") / "secrets" / "imagegen.env",
+    Path(".env"),
+)
 
 
 def utc_now() -> str:
@@ -33,6 +37,45 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_env_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if stripped.startswith("export "):
+        stripped = stripped[len("export ") :].strip()
+    if "=" not in stripped:
+        return None
+    name, value = stripped.split("=", 1)
+    name = name.strip()
+    value = value.strip().strip("'\"")
+    if not name:
+        return None
+    return name, value
+
+
+def load_env_file(path: Path) -> bool:
+    if not path.exists():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parsed = parse_env_line(line)
+        if not parsed:
+            continue
+        name, value = parsed
+        os.environ.setdefault(name, value)
+    return True
+
+
+def load_default_secret_env(project_root: Path | None = None) -> list[Path]:
+    roots = [project_root] if project_root else [Path.cwd()]
+    loaded: list[Path] = []
+    for root in roots:
+        for relative in DEFAULT_SECRET_FILES:
+            path = root / relative
+            if load_env_file(path):
+                loaded.append(path)
+    return loaded
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -330,6 +373,9 @@ def list_command(args: argparse.Namespace) -> None:
 
 
 def doctor_command(args: argparse.Namespace) -> None:
+    loaded_secrets = load_default_secret_env(
+        Path(args.project_root).resolve() if getattr(args, "project_root", None) else None
+    )
     config = load_command_config(args)
     warnings = validate_config(config)
     providers = providers_by_id(config)
@@ -348,6 +394,8 @@ def doctor_command(args: argparse.Namespace) -> None:
     print(f"Model: {provider.get('model')}")
     print(f"API key env: {env_name}")
     print(f"API key present: {'yes' if has_key else 'no'}")
+    if loaded_secrets:
+        print(f"Loaded secret env files: {', '.join(str(path) for path in loaded_secrets)}")
     for warning in warnings:
         print(f"Warning: {warning}")
     if args.require_key and not has_key:
