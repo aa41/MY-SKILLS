@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -328,6 +329,31 @@ def list_command(args: argparse.Namespace) -> None:
         )
 
 
+def doctor_command(args: argparse.Namespace) -> None:
+    config = load_command_config(args)
+    warnings = validate_config(config)
+    providers = providers_by_id(config)
+    provider_id = args.provider or str(config.get("active_provider") or "")
+    provider = providers.get(provider_id)
+    if not provider:
+        raise SystemExit(f"Unknown provider: {provider_id}")
+
+    env_name = str(provider.get("api_key_env") or "")
+    has_key = bool(os.getenv(env_name, "").strip())
+    print(f"Provider: {provider_id}")
+    print(f"Type: {provider.get('type')}")
+    print(f"Enabled: {provider.get('enabled')}")
+    print(f"Base URL: {provider.get('base_url')}")
+    print(f"Endpoint: {provider.get('endpoint')}")
+    print(f"Model: {provider.get('model')}")
+    print(f"API key env: {env_name}")
+    print(f"API key present: {'yes' if has_key else 'no'}")
+    for warning in warnings:
+        print(f"Warning: {warning}")
+    if args.require_key and not has_key:
+        raise SystemExit(f"Missing required environment variable: {env_name}")
+
+
 def set_active_command(args: argparse.Namespace) -> None:
     config_path = Path(args.config)
     config = read_json(config_path)
@@ -399,6 +425,13 @@ def build_parser() -> argparse.ArgumentParser:
     list_providers.add_argument("--project-root", help="Project root for layered resolution.")
     list_providers.add_argument("--run-dir", help="Run directory for layered resolution.")
 
+    doctor = subparsers.add_parser("doctor", help="Inspect the active imagegen provider without making API calls.")
+    doctor.add_argument("--config", help="Config path.")
+    doctor.add_argument("--project-root", help="Project root for layered resolution.")
+    doctor.add_argument("--run-dir", help="Run directory for layered resolution.")
+    doctor.add_argument("--provider", help="Provider id to inspect. Defaults to active_provider.")
+    doctor.add_argument("--require-key", action="store_true", help="Fail if the provider API key env var is missing.")
+
     set_active = subparsers.add_parser("set-active", help="Set active provider.")
     set_active.add_argument("--config", required=True, help="Config path.")
     set_active.add_argument("--provider", required=True, help="Provider id.")
@@ -423,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_command(args)
         elif args.command == "list":
             list_command(args)
+        elif args.command == "doctor":
+            doctor_command(args)
         elif args.command == "set-active":
             set_active_command(args)
         elif args.command == "resolve":

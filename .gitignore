@@ -2,3 +2,8 @@
 __pycache__/
 *.py[cod]
 .code-review-graph/
+.env
+.env.*
+!.env.example
+.agent-workflows/secrets/
+.agent-workflows/dev/

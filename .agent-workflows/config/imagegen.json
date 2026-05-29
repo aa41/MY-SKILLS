@@ -1,0 +1,26 @@
+{
+  "version": "0.1.0",
+  "active_provider": "openai-compatible-relay",
+  "providers": [
+    {
+      "id": "openai-compatible-relay",
+      "type": "openai-compatible",
+      "enabled": true,
+      "base_url": "https://fushengyunsuan.cn/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-2",
+      "endpoint": "/images/generations",
+      "default_size": "1024x1024",
+      "default_quality": "auto",
+      "supports_reference_images": true,
+      "supports_edit": true,
+      "supports_transparent_background": false,
+      "approval_required_for": [
+        "sensitive_image_upload",
+        "paid_model_call",
+        "external_network"
+      ],
+      "notes": "OpenAI-compatible GPT Image 2 relay. Secret value must be supplied through OPENAI_API_KEY at runtime."
+    }
+  ]
+}
