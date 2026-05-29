@@ -77,6 +77,17 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py record-design \
   --file /tmp/imagegen-prompt-plan.md
 ```
 
+Generate an approved UI mockup image through the internal draw-ui integration:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py generate-ui-image \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --provider openai-gpt-image-2 \
+  --type wide \
+  --name primary-ui \
+  --prompt "..."
+```
+
 Start UI replication planning after imagegen approval:
 
 ```bash
@@ -220,6 +231,8 @@ Implemented:
 - Phase 4 UI replication planning with code-write approval gate.
 - Phase 5 business logic planning with implementation/testing approval gate.
 - Phase 6 final acceptance planning, evidence review, and completion gate.
+- Built-in `multi-agent-dev-workflow/integrations/draw-ui` capability for configurable UI mockup generation, image-to-HTML reconstruction, and future native UI replication adapters.
+- Runner-managed `generate-ui-image` command that enforces imagegen approval, reads run-level imagegen config, calls the internal draw-ui adapter, and records generated-image artifacts in the workflow ledger.
 - Independent imagegen provider config for OpenAI-compatible APIs, relay/gateway services, Gemini placeholders, and custom HTTP providers.
 - Local state and event ledger.
 - Initial scope approval gate.
@@ -252,6 +265,8 @@ The config supports these provider types:
 - `custom-http`: Generic image gateway placeholder for self-hosted or third-party image services.
 
 Secrets are not stored in config. Use `api_key_env` to name the environment variable.
+
+`multi-agent-dev-workflow/integrations/draw-ui` uses this same config. It does not read a hard-coded API key name; run-level `config/imagegen.json` decides the provider and `api_key_env`. Normal execution should go through `workflow_runner.py generate-ui-image`; direct `ask_draw.sh` usage is reserved for low-level adapter smoke tests and controlled debugging.
 
 Commands:
 

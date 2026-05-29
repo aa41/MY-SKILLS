@@ -7,6 +7,8 @@ import argparse
 import json
 import re
 import importlib.util
+import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -351,6 +353,7 @@ Do not edit product code. Write a final acceptance report.
 ]
 
 IMAGEGEN_CONFIG_MODULE_PATH = Path(__file__).with_name("imagegen_config.py")
+DRAW_UI_ASK_SCRIPT = Path(__file__).resolve().parents[1] / "integrations" / "draw-ui" / "scripts" / "ask_draw.sh"
 
 
 def utc_now() -> str:
@@ -375,6 +378,13 @@ def read_requirement(args: argparse.Namespace) -> str:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def display_path(path: Path, base: Path) -> str:
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
 
 
 def load_imagegen_config_module() -> Any:
@@ -1317,8 +1327,35 @@ def active_provider_from_config(config: dict[str, Any]) -> dict[str, Any]:
     raise SystemExit(f"Active imagegen provider not found: {active_provider}")
 
 
+def provider_from_config(config: dict[str, Any], provider_id: str) -> dict[str, Any]:
+    for provider in config.get("providers", []):
+        if isinstance(provider, dict) and provider.get("id") == provider_id:
+            return provider
+    raise SystemExit(f"Imagegen provider not found: {provider_id}")
+
+
+def approval_status(state: dict[str, Any], approval_id: str) -> str | None:
+    for approval in state.get("approvals", []):
+        if approval.get("id") == approval_id:
+            return approval.get("status")
+    return None
+
+
+def draw_ui_provider_from_config(config: dict[str, Any]) -> dict[str, Any] | None:
+    providers = [provider for provider in config.get("providers", []) if isinstance(provider, dict)]
+    active_provider = config.get("active_provider")
+    for provider in providers:
+        if provider.get("id") == active_provider and provider.get("type") in {"openai-compatible", "custom-http"}:
+            return provider
+    for provider in providers:
+        if provider.get("type") in {"openai-compatible", "custom-http"} and provider.get("enabled"):
+            return provider
+    return None
+
+
 def imagegen_dry_run_plan(config: dict[str, Any]) -> dict[str, Any]:
     provider = active_provider_from_config(config)
+    draw_ui_provider = draw_ui_provider_from_config(config)
     return {
         "version": "0.1.0",
         "created_at": utc_now(),
@@ -1330,10 +1367,56 @@ def imagegen_dry_run_plan(config: dict[str, Any]) -> dict[str, Any]:
         "base_url": provider.get("base_url"),
         "api_key_env": provider.get("api_key_env"),
         "approval_required_for": provider.get("approval_required_for", []),
+        "draw_ui_integration": {
+            "source": "multi-agent-dev-workflow/integrations/draw-ui",
+            "integration_mode": "internal-capability",
+            "supported_provider_types": [
+                "openai-compatible",
+                "custom-http",
+            ],
+            "provider_id": draw_ui_provider.get("id") if draw_ui_provider else None,
+            "provider_enabled": draw_ui_provider.get("enabled") if draw_ui_provider else False,
+            "api_key_env": draw_ui_provider.get("api_key_env") if draw_ui_provider else None,
+            "workflow_command": [
+                "python3",
+                "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                "generate-ui-image",
+                "--run-dir",
+                ".agent-workflows/dev/<run-id>",
+                "--provider",
+                str(draw_ui_provider.get("id") if draw_ui_provider else "<image-provider-id>"),
+                "--type",
+                "wide",
+                "--name",
+                "primary-ui",
+                "--prompt",
+                "<prompt from artifacts/design/02-imagegen-prompt-plan.md>",
+                "--output",
+                "artifacts/design/generated/primary-ui.png",
+            ],
+            "internal_script_command": [
+                "multi-agent-dev-workflow/integrations/draw-ui/scripts/ask_draw.sh",
+                "--imagegen-config",
+                "config/imagegen.json",
+                "--provider",
+                str(draw_ui_provider.get("id") if draw_ui_provider else "<image-provider-id>"),
+                "--type",
+                "wide",
+                "--name",
+                "primary-ui",
+                "--prompt",
+                "<prompt from artifacts/design/02-imagegen-prompt-plan.md>",
+                "--output",
+                "artifacts/design/generated/primary-ui.png",
+            ],
+            "html_reconstruction_reference": "multi-agent-dev-workflow/integrations/draw-ui/references/html-reconstruction.md",
+            "verification_script": "multi-agent-dev-workflow/integrations/draw-ui/scripts/verify_html_mockup.sh",
+        },
         "planned_outputs": [
             "artifacts/design/generated/primary-ui.png",
             "artifacts/design/generated/alternate-ui.png",
             "artifacts/design/generated/state-coverage.png",
+            "artifacts/design/generated/*.png.json",
         ],
         "input_artifacts": [
             "docs/prd.md",
@@ -1498,8 +1581,31 @@ def ui_replication_dry_run_plan() -> dict[str, Any]:
         "planned_outputs": [
             "artifacts/implementation/01-ui-source-audit.md",
             "artifacts/implementation/02-ui-replication-plan.md",
+            "artifacts/implementation/html/",
+            "artifacts/implementation/flutter/",
+            "artifacts/implementation/android/",
+            "artifacts/implementation/ios/",
             "artifacts/validation/01-ui-validation-plan.md",
         ],
+        "draw_ui_integration": {
+            "source": "multi-agent-dev-workflow/integrations/draw-ui",
+            "integration_mode": "internal-capability",
+            "current_capability": "image-to-html reconstruction and screenshot comparison",
+            "target_replication_paths": [
+                "html",
+                "flutter",
+                "android",
+                "ios",
+            ],
+            "html_reference": "multi-agent-dev-workflow/integrations/draw-ui/references/html-reconstruction.md",
+            "html_verify_script": "multi-agent-dev-workflow/integrations/draw-ui/scripts/verify_html_mockup.sh",
+            "pixel_compare_script": "multi-agent-dev-workflow/integrations/draw-ui/scripts/compare_mockup.py",
+            "future_adapters": [
+                "html-to-flutter",
+                "html-to-android",
+                "html-to-ios",
+            ],
+        },
         "approval_required_for": [
             "code_write",
             "dependency_install",
@@ -1524,6 +1630,13 @@ def start_ui_replication_phase(args: argparse.Namespace) -> None:
 
     prompts_dir = run_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
+    for directory in (
+        "artifacts/implementation/html",
+        "artifacts/implementation/flutter",
+        "artifacts/implementation/android",
+        "artifacts/implementation/ios",
+    ):
+        (run_dir / directory).mkdir(parents=True, exist_ok=True)
     nodes = state.setdefault("nodes", {})
     now = utc_now()
 
@@ -2081,6 +2194,130 @@ def record_acceptance_output(args: argparse.Namespace) -> None:
     write_index(run_dir, state)
 
 
+def generate_ui_image(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if approval_status(state, IMAGEGEN_APPROVAL_ID) != "approved" and not args.force:
+        raise SystemExit(
+            f"Image generation requires approved {IMAGEGEN_APPROVAL_ID}. "
+            "Use --force only for local mock/smoke runs."
+        )
+
+    imagegen_config = load_imagegen_config_module()
+    config_path = run_dir / "config/imagegen.json"
+    config = imagegen_config.read_json(config_path)
+    imagegen_config.validate_config(config)
+
+    provider = provider_from_config(config, args.provider) if args.provider else active_provider_from_config(config)
+    provider_type = provider.get("type")
+    if provider_type not in {"openai-compatible", "custom-http"}:
+        raise SystemExit(
+            "The internal draw-ui executor supports only openai-compatible or custom-http providers. "
+            f"Provider {provider.get('id')!r} is {provider_type!r}."
+        )
+    if not provider.get("enabled") and not args.allow_disabled_provider:
+        raise SystemExit(
+            f"Imagegen provider is disabled: {provider.get('id')}. "
+            "Enable it or pass --allow-disabled-provider for a controlled test."
+        )
+
+    api_key_env = str(provider.get("api_key_env") or "")
+    if not os.getenv(api_key_env, "").strip() and not args.skip_env_check:
+        raise SystemExit(
+            f"Missing environment variable {api_key_env}. "
+            "The workflow stores only env var names, not raw API keys."
+        )
+
+    output = Path(args.output) if args.output else Path("artifacts/design/generated/primary-ui.png")
+    output_path = output if output.is_absolute() else run_dir / output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        str(DRAW_UI_ASK_SCRIPT),
+        "--imagegen-config",
+        str(config_path),
+        "--provider",
+        str(provider.get("id")),
+        "--type",
+        args.type,
+        "--name",
+        args.name,
+        "--prompt",
+        args.prompt,
+        "--output",
+        str(output_path),
+    ]
+    if args.frame:
+        command.extend(["--frame", args.frame])
+    for ref in args.ref or []:
+        command.extend(["--ref", ref])
+
+    now = utc_now()
+    node = state.setdefault("nodes", {}).setdefault("draw_ui_image_generation", {})
+    node.update(
+        {
+            "status": "running",
+            "artifact": display_path(output_path, run_dir),
+            "provider": provider.get("id"),
+            "started_at": now,
+            "finished_at": None,
+        }
+    )
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_image_generation_started",
+        provider_id=provider.get("id"),
+        provider_type=provider_type,
+        output=str(output_path),
+    )
+
+    try:
+        completed = subprocess.run(command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        node["status"] = "failed"
+        node["finished_at"] = utc_now()
+        node["error"] = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+        state["status"] = "partial"
+        save_state(run_dir, state)
+        append_event(
+            run_dir,
+            "draw_ui_image_generation_failed",
+            provider_id=provider.get("id"),
+            output=str(output_path),
+            returncode=exc.returncode,
+        )
+        raise SystemExit(node["error"]) from exc
+
+    metadata_path = output_path.with_suffix(output_path.suffix + ".json")
+    rel_output = display_path(output_path, run_dir)
+    rel_metadata = display_path(metadata_path, run_dir)
+    node.update(
+        {
+            "status": "success",
+            "artifact": rel_output,
+            "metadata": rel_metadata,
+            "finished_at": utc_now(),
+        }
+    )
+    state.setdefault("artifacts", {}).setdefault("design_generation_outputs", []).append(rel_output)
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_image_generation_completed",
+        provider_id=provider.get("id"),
+        output=rel_output,
+        metadata=rel_metadata,
+    )
+    append_event(run_dir, "artifact_written", artifact=rel_output)
+    if metadata_path.exists():
+        append_event(run_dir, "artifact_written", artifact=rel_metadata)
+    write_index(run_dir, state)
+    print(completed.stdout.strip())
+
+
 def resume_run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     decision = args.decision.lower()
@@ -2233,6 +2470,37 @@ def build_parser() -> argparse.ArgumentParser:
     record_acceptance.add_argument("--content", help="Inline Markdown role output.")
     record_acceptance.add_argument("--status", help="Override inferred status.")
 
+    generate_ui = subparsers.add_parser(
+        "generate-ui-image", help="Generate a UI image through the internal draw-ui integration."
+    )
+    generate_ui.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    generate_ui.add_argument("--prompt", required=True, help="Prompt approved for UI image generation.")
+    generate_ui.add_argument("--provider", help="Provider id from run config/imagegen.json. Defaults to active provider.")
+    generate_ui.add_argument("--type", default="wide", choices=["classic", "portrait", "square", "ultrawide", "wide"])
+    generate_ui.add_argument("--name", default="primary-ui", help="Output name used in metadata.")
+    generate_ui.add_argument("--frame", help="Reference frame image path.")
+    generate_ui.add_argument("--ref", action="append", default=[], help="Additional reference image path or URL.")
+    generate_ui.add_argument(
+        "--output",
+        default="artifacts/design/generated/primary-ui.png",
+        help="Output path, relative to run dir unless absolute.",
+    )
+    generate_ui.add_argument(
+        "--allow-disabled-provider",
+        action="store_true",
+        help="Allow execution with a disabled provider for controlled tests.",
+    )
+    generate_ui.add_argument(
+        "--skip-env-check",
+        action="store_true",
+        help="Skip local API-key environment check and let the integration script fail if needed.",
+    )
+    generate_ui.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass imagegen approval requirement for local mock/smoke runs.",
+    )
+
     resume = subparsers.add_parser("resume", help="Record an approval decision.")
     resume.add_argument("--run-dir", required=True, help="Workflow run directory.")
     resume.add_argument("--approval", required=True, help="Approval id.")
@@ -2292,6 +2560,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "record-acceptance":
         record_acceptance_output(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "generate-ui-image":
+        generate_ui_image(args)
         print_status(Path(args.run_dir))
         return 0
     if args.command == "resume":

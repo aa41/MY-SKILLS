@@ -84,6 +84,37 @@ python3 multi-agent-dev-workflow/scripts/imagegen_config.py set-active \
 
 This overrides only the relay provider and leaves the rest of the default provider definitions intact.
 
+## Draw UI Provider Example
+
+`multi-agent-dev-workflow/integrations/draw-ui` uses the same workflow config and reads only the environment variable named by `api_key_env`.
+Call it through the workflow runner so approval state and generated artifacts are recorded:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py generate-ui-image \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --provider openai-gpt-image-2 \
+  --type wide \
+  --name primary-ui \
+  --prompt "..."
+```
+
+```json
+{
+  "active_provider": "openai-gpt-image-2",
+  "providers": [
+    {
+      "id": "openai-gpt-image-2",
+      "type": "openai-compatible",
+      "enabled": true,
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-image-2",
+      "endpoint": "/images/generations"
+    }
+  ]
+}
+```
+
 ## Safety
 
 - Do not store raw API keys in config.
