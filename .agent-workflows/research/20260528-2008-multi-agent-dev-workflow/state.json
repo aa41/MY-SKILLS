@@ -1,0 +1,101 @@
+{
+  "run_id": "20260528-2008-multi-agent-dev-workflow",
+  "created_at": "2026-05-28T12:09:08.370479+00:00",
+  "status": "completed",
+  "requirement_path": "requirement.md",
+  "research_pack_path": "research-pack.md",
+  "roles": [
+    {
+      "id": "researcher-a",
+      "phase": "research",
+      "status": "success",
+      "prompt_path": "prompts/researcher-a.md",
+      "artifact_path": "artifacts/01-researcher-a-product-domain.md",
+      "confidence": "high"
+    },
+    {
+      "id": "researcher-b",
+      "phase": "research",
+      "status": "success",
+      "prompt_path": "prompts/researcher-b.md",
+      "artifact_path": "artifacts/02-researcher-b-architecture-implementation.md",
+      "confidence": null
+    },
+    {
+      "id": "researcher-c",
+      "phase": "research",
+      "status": "success",
+      "prompt_path": "prompts/researcher-c.md",
+      "artifact_path": "artifacts/03-researcher-c-risk-edge-cases.md",
+      "confidence": "high"
+    },
+    {
+      "id": "reviewer-a",
+      "phase": "review",
+      "status": "success",
+      "prompt_path": "prompts/reviewer-a.md",
+      "artifact_path": "artifacts/04-reviewer-a-evidence-audit.md",
+      "confidence": "high"
+    },
+    {
+      "id": "reviewer-b",
+      "phase": "review",
+      "status": "success",
+      "prompt_path": "prompts/reviewer-b.md",
+      "artifact_path": "artifacts/05-reviewer-b-decision-audit.md",
+      "confidence": null
+    },
+    {
+      "id": "synthesizer",
+      "phase": "synthesis",
+      "status": "success",
+      "prompt_path": "prompts/synthesizer.md",
+      "artifact_path": "artifacts/06-final-synthesis.md",
+      "confidence": "high"
+    }
+  ],
+  "final_confidence": "high",
+  "updated_at": "2026-05-28T12:35:22.305595+00:00",
+  "source_links": [
+    "https://arc42.org/overview",
+    "https://autogenhub.github.io/autogen/docs/Use-Cases/agent_chat/",
+    "https://developers.openai.com/api/docs/guides/image-generation",
+    "https://developers.openai.com/api/docs/guides/your-data",
+    "https://developers.openai.com/api/docs/models/gpt-image-2",
+    "https://developers.openai.com/codex/skills",
+    "https://developers.openai.com/codex/skills/",
+    "https://developers.openai.com/codex/subagents",
+    "https://developers.openai.com/tracks/building-agents/",
+    "https://docs.crewai.com/en/concepts/flows",
+    "https://docs.github.com/en/actions/reference/security",
+    "https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects",
+    "https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches",
+    "https://docs.langchain.com/oss/python/langgraph/use-time-travel",
+    "https://docs.temporal.io/",
+    "https://github.com/ossf/scorecard",
+    "https://help.figma.com/hc/en-us/articles/15023124644247-Guide-to-Dev-Mode",
+    "https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server",
+    "https://langchain-5e9cc07a.mintlify.app/oss/python/langgraph/persistence",
+    "https://langchain-ai.github.io/langgraph/how-tos/human_in_the_loop/wait-user-input/",
+    "https://langchain-ai.github.io/langgraph/reference/",
+    "https://modelcontextprotocol.io/docs/getting-started/intro",
+    "https://modelcontextprotocol.io/docs/learn/architecture",
+    "https://modelcontextprotocol.io/specification/2025-06-18",
+    "https://modelcontextprotocol.io/specification/2025-06-18/server/tools",
+    "https://openai.github.io/openai-agents-js/guides/guardrails/",
+    "https://openai.github.io/openai-agents-python/agents/",
+    "https://openai.github.io/openai-agents-python/human_in_the_loop/",
+    "https://openai.github.io/openai-agents-python/tracing/",
+    "https://owasp.org/www-project-mcp-top-10/",
+    "https://owasp.org/www-project-top-10-for-large-language-model-applications/",
+    "https://platform.openai.com/docs/guides/image-generation",
+    "https://playwright.dev/docs/screenshots",
+    "https://playwright.dev/docs/test-snapshots",
+    "https://pydantic.dev/docs/ai/integrations/durable_execution/overview/",
+    "https://slsa.dev/spec/latest/",
+    "https://www.copyright.gov/ai/Copyright-and-Artificial-Intelligence-Part-2-Copyrightability-Report.pdf",
+    "https://www.iso.org/standard/72089.html"
+  ],
+  "final_decision_summary": "推荐方案是：**先设计并实现一个框架无关的 artifact-first workflow contract 与本地 runner，再把 LangGraph、OpenAI Agents SDK、Codex subagents、MCP、Figma、gpt-image-2、Playwright 等能力作为可插拔执行/工具适配器逐步接入。**\n\n最终架构采用四层：\n\n1. **Workflow Orchestrator**\n   - 第一版：repo-local runner + 明确状态机 + `state.json` / `events.jsonl` / approval artifacts。\n   - 第二版：用 LangGraph 或等价图编排框架 prototype 验证 checkpoint、parallel branches、interrupt/resume。\n   - 生产化阶段：只有在跨天运行、多用户并发、可靠重试、任务队列、审计后台成为硬需求后，再评估 Temporal。\n\n2. **Agent Execution Layer**\n   - Codex subagents、OpenAI Agents SDK、Claude/Cursor/manual runner 都作为执行适配器。\n   - researcher/reviewer 默认 read-only；designer 只能写设计 artifact；implementer 才允许 workspace-write；tester 可运行测试但不能降低断言或自行更新 visual baseline。\n\n3. **Skill/MCP Plugin Layer**\n   - skill/subagent/MCP server 必须通过 manifest 和 lockfile 接入。\n   - 每个能力声明 `name`、`version`、`source`、`pinned_ref`、`inputs`、`outputs`、`permissions`、`side_effects`、`approval_required_for`。\n   - 默认 deny；网络、外部写 API、secrets、部署、baseline 更新、生产数据访问都必须审批。\n\n4. **Artifact Ledger**\n   - artifact 是事实源，chat history 不是事实源。\n   - 每个节点必须读入明确 artifact，写出明确 artifact，更新 machine-readable state，并追加不可变 event。\n   - 最终验收依赖 `acceptance.md` 中的需求项到证据 traceability matrix。",
+  "open_questions": []
+}

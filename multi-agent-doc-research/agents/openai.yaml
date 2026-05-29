@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multi-Agent Doc Research"
+  short_description: "3+2+1 agents for research decisions"
+  default_prompt: "Use $multi-agent-doc-research to research this feature request and recommend the best implementation plan."
