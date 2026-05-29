@@ -48,6 +48,31 @@ UI replication consumes generated images and writes:
 - `artifacts/implementation/html/`
 - `artifacts/validation/`
 
+HTML reconstruction is runner-managed:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py replicate-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --reference artifacts/design/generated/primary-ui.png \
+  --name primary-ui \
+  --html-file /tmp/primary-ui.html
+```
+
+If `--html-file` or `--html` is omitted, the command writes a reconstruction prompt package and manifest with `pending_html` status. A human or subagent can then produce the HTML and rerun the command with the HTML artifact.
+
+HTML verification is also runner-managed:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --html artifacts/implementation/html/primary-ui.html \
+  --reference artifacts/design/generated/primary-ui.png \
+  --out-dir artifacts/validation/ui-html/primary-ui \
+  --viewport 1024x1536
+```
+
+When `agent-browser` is unavailable, pass `--candidate-screenshot` to compare an existing browser screenshot through `compare_mockup.py`.
+
 ## Target Replication Roadmap
 
 Current implementation target:

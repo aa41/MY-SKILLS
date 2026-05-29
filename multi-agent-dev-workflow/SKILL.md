@@ -13,10 +13,10 @@ The first implementation is intentionally narrow:
 
 - Create a repo-local development workflow run directory.
 - Persist `requirement.md`, `workflow.yaml`, `state.json`, `events.jsonl`, approval artifacts, docs placeholders, logs, and lockfiles.
-- Support `run`, `status`, `resume`, `start-docs`, `record`, `start-design`, `record-design`, `start-ui-replication`, `record-ui-replication`, `start-business-logic`, `record-business-logic`, `start-acceptance`, and `record-acceptance` commands.
+- Support `run`, `status`, `resume`, `start-docs`, `record`, `start-design`, `record-design`, `generate-ui-image`, `start-ui-replication`, `record-ui-replication`, `replicate-ui-html`, `verify-ui-html`, `start-business-logic`, `record-business-logic`, `start-acceptance`, and `record-acceptance` commands.
 - Keep all high-impact actions behind explicit approval gates.
 
-It does not directly edit business code, install dependencies, call external systems, generate images, update visual baselines, or deploy. Those capabilities must be added later as explicit workflow nodes with manifest permissions and approval boundaries.
+It does not directly edit business code, install dependencies, update product visual baselines, or deploy. External image generation and UI verification are explicit workflow nodes with approval boundaries and recorded artifacts.
 
 ## Quick Start
 
@@ -93,6 +93,27 @@ Start UI replication planning after imagegen approval:
 ```bash
 python3 multi-agent-dev-workflow/scripts/workflow_runner.py start-ui-replication \
   --run-dir .agent-workflows/dev/<run-id>
+```
+
+Record or prepare an HTML reconstruction from a generated image or screenshot:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py replicate-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --reference artifacts/design/generated/primary-ui.png \
+  --name primary-ui \
+  --html-file /tmp/primary-ui.html
+```
+
+Verify reconstructed HTML against the same reference:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --html artifacts/implementation/html/primary-ui.html \
+  --reference artifacts/design/generated/primary-ui.png \
+  --out-dir artifacts/validation/ui-html/primary-ui \
+  --viewport 1024x1536
 ```
 
 Record a UI replication role output:

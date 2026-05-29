@@ -33,6 +33,28 @@ python3 multi-agent-dev-workflow/scripts/workflow_runner.py generate-ui-image \
 
 The runner checks image-generation approval, reads run-level `config/imagegen.json`, invokes the internal adapter, and records output artifacts/events.
 
+For HTML reconstruction, use:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py replicate-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --reference artifacts/design/generated/dashboard.png \
+  --name dashboard \
+  --html-file /tmp/dashboard.html
+```
+
+Then verify the result:
+
+```bash
+python3 multi-agent-dev-workflow/scripts/workflow_runner.py verify-ui-html \
+  --run-dir .agent-workflows/dev/<run-id> \
+  --html artifacts/implementation/html/dashboard.html \
+  --reference artifacts/design/generated/dashboard.png \
+  --out-dir artifacts/validation/ui-html/dashboard
+```
+
+If no HTML is ready yet, run `replicate-ui-html` without `--html-file` to create a prompt package for a human or subagent. If `agent-browser` is unavailable, use `verify-ui-html --candidate-screenshot` with an existing browser screenshot.
+
 The workflow may trigger this capability for requests like:
 
 > 帮我设计一个 Dashboard 页面  

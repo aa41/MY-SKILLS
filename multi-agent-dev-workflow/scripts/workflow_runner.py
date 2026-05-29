@@ -8,6 +8,7 @@ import json
 import re
 import importlib.util
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -354,6 +355,15 @@ Do not edit product code. Write a final acceptance report.
 
 IMAGEGEN_CONFIG_MODULE_PATH = Path(__file__).with_name("imagegen_config.py")
 DRAW_UI_ASK_SCRIPT = Path(__file__).resolve().parents[1] / "integrations" / "draw-ui" / "scripts" / "ask_draw.sh"
+DRAW_UI_VERIFY_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "integrations" / "draw-ui" / "scripts" / "verify_html_mockup.sh"
+)
+DRAW_UI_COMPARE_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "integrations" / "draw-ui" / "scripts" / "compare_mockup.py"
+)
+DRAW_UI_HTML_REFERENCE = (
+    Path(__file__).resolve().parents[1] / "integrations" / "draw-ui" / "references" / "html-reconstruction.md"
+)
 
 
 def utc_now() -> str:
@@ -380,11 +390,24 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def read_text_arg(*, file: str | None, content: str | None, label: str) -> str:
+    if file and content:
+        raise SystemExit(f"Use either --{label}-file or --{label}, not both.")
+    if file:
+        return Path(file).read_text(encoding="utf-8")
+    return content or ""
+
+
 def display_path(path: Path, base: Path) -> str:
     try:
         return str(path.relative_to(base))
     except ValueError:
         return str(path)
+
+
+def resolve_path(value: str, base: Path) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else base / path
 
 
 def load_imagegen_config_module() -> Any:
@@ -1591,6 +1614,34 @@ def ui_replication_dry_run_plan() -> dict[str, Any]:
             "source": "multi-agent-dev-workflow/integrations/draw-ui",
             "integration_mode": "internal-capability",
             "current_capability": "image-to-html reconstruction and screenshot comparison",
+            "workflow_commands": [
+                [
+                    "python3",
+                    "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                    "replicate-ui-html",
+                    "--run-dir",
+                    ".agent-workflows/dev/<run-id>",
+                    "--reference",
+                    "artifacts/design/generated/primary-ui.png",
+                    "--name",
+                    "primary-ui",
+                    "--html-file",
+                    "<reconstructed-html-file>",
+                ],
+                [
+                    "python3",
+                    "multi-agent-dev-workflow/scripts/workflow_runner.py",
+                    "verify-ui-html",
+                    "--run-dir",
+                    ".agent-workflows/dev/<run-id>",
+                    "--html",
+                    "artifacts/implementation/html/primary-ui.html",
+                    "--reference",
+                    "artifacts/design/generated/primary-ui.png",
+                    "--out-dir",
+                    "artifacts/validation/ui-html/primary-ui",
+                ],
+            ],
             "target_replication_paths": [
                 "html",
                 "flutter",
@@ -2318,6 +2369,266 @@ def generate_ui_image(args: argparse.Namespace) -> None:
     print(completed.stdout.strip())
 
 
+def html_replication_prompt(*, reference: str, output: str, name: str, notes: str) -> str:
+    notes_block = notes.strip() or "No extra notes."
+    return f"""# HTML UI Replication Prompt
+
+Status: pending
+
+## Objective
+
+Reconstruct the reference UI mockup or screenshot as production-quality HTML/CSS.
+
+## Inputs
+
+- Reference image: `{reference}`
+- Target HTML: `{output}`
+- Draw UI reconstruction guide: `{display_path(DRAW_UI_HTML_REFERENCE, Path.cwd())}`
+
+## Requirements
+
+- Build layout, text, controls, cards, tables, and ordinary icons with HTML/CSS/SVG.
+- Use generated or prepared image assets only for complex visuals that are impractical to code directly.
+- Preserve responsive constraints, viewport framing, text legibility, and visual hierarchy.
+- Do not edit product code outside the workflow artifact directory unless a later approval explicitly permits it.
+- After HTML is produced, run `verify-ui-html` against the same reference.
+
+## Notes
+
+{notes_block}
+
+## Expected Output
+
+Write complete HTML to `{output}`. Keep local asset paths relative to the HTML file.
+"""
+
+
+def replicate_ui_html(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    if state.get("current_phase") not in {"ui_replication", "ui_replication_approval", "business_logic"} and not args.force:
+        raise SystemExit(
+            "HTML replication should run during or after ui_replication planning. "
+            f"Current phase is {state.get('current_phase')!r}; use --force for controlled local tests."
+        )
+
+    reference_path = resolve_path(args.reference, run_dir)
+    if not reference_path.exists():
+        raise SystemExit(f"Reference image not found: {reference_path}")
+
+    name = slugify(args.name or reference_path.stem, fallback="ui-html")
+    output_arg = args.output or f"artifacts/implementation/html/{name}.html"
+    output_path = resolve_path(output_arg, run_dir)
+    prompt_path = resolve_path(args.prompt_output or f"artifacts/implementation/html/{name}.replication-prompt.md", run_dir)
+    manifest_path = resolve_path(args.manifest_output or f"artifacts/implementation/html/{name}.replication.json", run_dir)
+
+    html = read_text_arg(file=args.html_file, content=args.html, label="html")
+    notes = read_text_arg(file=args.notes_file, content=args.notes, label="notes")
+
+    prompt = html_replication_prompt(
+        reference=display_path(reference_path, run_dir),
+        output=display_path(output_path, run_dir),
+        name=name,
+        notes=notes,
+    )
+    write_text(prompt_path, prompt)
+
+    status = "pending_html"
+    if html:
+        write_text(output_path, html)
+        status = "success"
+    elif args.require_html:
+        raise SystemExit("Provide --html-file or --html when --require-html is set.")
+
+    manifest = {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "name": name,
+        "status": status,
+        "reference": display_path(reference_path, run_dir),
+        "html": display_path(output_path, run_dir),
+        "prompt": display_path(prompt_path, run_dir),
+        "guide": display_path(DRAW_UI_HTML_REFERENCE, Path.cwd()),
+        "notes": notes,
+        "execution_note": (
+            "HTML artifact was recorded from provided content."
+            if html
+            else "No HTML artifact was provided. Prompt package is ready for a human or subagent."
+        ),
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    node = state.setdefault("nodes", {}).setdefault("draw_ui_html_replication", {})
+    node.update(
+        {
+            "status": status,
+            "artifact": display_path(output_path, run_dir) if html else display_path(prompt_path, run_dir),
+            "manifest": display_path(manifest_path, run_dir),
+            "reference": display_path(reference_path, run_dir),
+            "finished_at": utc_now(),
+        }
+    )
+    if not node.get("started_at"):
+        node["started_at"] = node["finished_at"]
+    state.setdefault("artifacts", {}).setdefault("ui_replication_outputs", []).append(display_path(manifest_path, run_dir))
+    if html:
+        state.setdefault("artifacts", {}).setdefault("ui_replication_outputs", []).append(display_path(output_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running" if html else "partial"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_html_replication_recorded",
+        status=status,
+        reference=display_path(reference_path, run_dir),
+        html=display_path(output_path, run_dir) if html else None,
+        manifest=display_path(manifest_path, run_dir),
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(prompt_path, run_dir))
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    if html:
+        append_event(run_dir, "artifact_written", artifact=display_path(output_path, run_dir))
+    write_index(run_dir, state)
+    print(f"replication_status={status}")
+    print(f"manifest={manifest_path}")
+    if html:
+        print(f"html={output_path}")
+
+
+def verify_ui_html(args: argparse.Namespace) -> None:
+    run_dir = Path(args.run_dir).resolve()
+    state = load_state(run_dir)
+    html_path = resolve_path(args.html, run_dir)
+    reference_path = resolve_path(args.reference, run_dir)
+    if not html_path.exists():
+        raise SystemExit(f"HTML file not found: {html_path}")
+    if not reference_path.exists():
+        raise SystemExit(f"Reference image not found: {reference_path}")
+
+    name = slugify(args.name or html_path.stem, fallback="ui-html")
+    out_dir = resolve_path(args.out_dir or f"artifacts/validation/ui-html/{name}", run_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    node = state.setdefault("nodes", {}).setdefault("draw_ui_html_verification", {})
+    node.update(
+        {
+            "status": "running",
+            "artifact": display_path(out_dir, run_dir),
+            "html": display_path(html_path, run_dir),
+            "reference": display_path(reference_path, run_dir),
+            "started_at": utc_now(),
+            "finished_at": None,
+        }
+    )
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_html_verification_started",
+        html=display_path(html_path, run_dir),
+        reference=display_path(reference_path, run_dir),
+        out_dir=display_path(out_dir, run_dir),
+    )
+
+    if args.candidate_screenshot:
+        candidate_path = resolve_path(args.candidate_screenshot, run_dir)
+        if not candidate_path.exists():
+            raise SystemExit(f"Candidate screenshot not found: {candidate_path}")
+        command = [
+            "python3",
+            str(DRAW_UI_COMPARE_SCRIPT),
+            "--reference",
+            str(reference_path),
+            "--candidate",
+            str(candidate_path),
+            "--out-dir",
+            str(out_dir),
+            "--prefix",
+            args.prefix,
+        ]
+        for clip in args.clip or []:
+            command.extend(["--clip", clip])
+    else:
+        if not shutil.which("agent-browser"):
+            raise SystemExit(
+                "agent-browser is required for browser screenshot verification. "
+                "Install it or pass --candidate-screenshot to compare an existing screenshot."
+            )
+        command = [
+            str(DRAW_UI_VERIFY_SCRIPT),
+            "--html",
+            str(html_path),
+            "--reference",
+            str(reference_path),
+            "--out-dir",
+            str(out_dir),
+            "--viewport",
+            args.viewport,
+            "--session",
+            args.session,
+        ]
+        if args.full_page:
+            command.append("--full-page")
+
+    try:
+        completed = subprocess.run(command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        node["status"] = "failed"
+        node["finished_at"] = utc_now()
+        node["error"] = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+        state["status"] = "partial"
+        save_state(run_dir, state)
+        append_event(
+            run_dir,
+            "draw_ui_html_verification_failed",
+            html=display_path(html_path, run_dir),
+            reference=display_path(reference_path, run_dir),
+            returncode=exc.returncode,
+        )
+        raise SystemExit(node["error"]) from exc
+
+    metrics_path = out_dir / f"{args.prefix}-metrics.json"
+    manifest_path = out_dir / "verification.json"
+    manifest = {
+        "version": "0.1.0",
+        "created_at": utc_now(),
+        "status": "success",
+        "html": display_path(html_path, run_dir),
+        "reference": display_path(reference_path, run_dir),
+        "out_dir": display_path(out_dir, run_dir),
+        "metrics": display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+        "mode": "candidate-screenshot" if args.candidate_screenshot else "browser-screenshot",
+        "command": command,
+    }
+    write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
+    node.update(
+        {
+            "status": "success",
+            "artifact": display_path(manifest_path, run_dir),
+            "metrics": display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+            "finished_at": utc_now(),
+        }
+    )
+    state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(manifest_path, run_dir))
+    if metrics_path.exists():
+        state.setdefault("artifacts", {}).setdefault("validation_outputs", []).append(display_path(metrics_path, run_dir))
+    if state["status"] not in {"waiting_for_approval", "cancelled", "completed"}:
+        state["status"] = "running"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        "draw_ui_html_verification_completed",
+        html=display_path(html_path, run_dir),
+        reference=display_path(reference_path, run_dir),
+        manifest=display_path(manifest_path, run_dir),
+        metrics=display_path(metrics_path, run_dir) if metrics_path.exists() else None,
+    )
+    append_event(run_dir, "artifact_written", artifact=display_path(manifest_path, run_dir))
+    if metrics_path.exists():
+        append_event(run_dir, "artifact_written", artifact=display_path(metrics_path, run_dir))
+    write_index(run_dir, state)
+    print(completed.stdout.strip())
+    print(f"verification={manifest_path}")
+
+
 def resume_run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir)
     decision = args.decision.lower()
@@ -2501,6 +2812,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bypass imagegen approval requirement for local mock/smoke runs.",
     )
 
+    replicate_html = subparsers.add_parser(
+        "replicate-ui-html", help="Record or prepare an HTML reconstruction from a UI reference image."
+    )
+    replicate_html.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    replicate_html.add_argument("--reference", required=True, help="Reference mockup/screenshot path.")
+    replicate_html.add_argument("--name", help="Stable name for output artifacts.")
+    replicate_html.add_argument("--output", help="HTML output path, relative to run dir unless absolute.")
+    replicate_html.add_argument("--html-file", help="Existing reconstructed HTML file to record.")
+    replicate_html.add_argument("--html", help="Inline reconstructed HTML content.")
+    replicate_html.add_argument("--notes-file", help="Markdown notes for the reconstruction agent.")
+    replicate_html.add_argument("--notes", help="Inline notes for the reconstruction agent.")
+    replicate_html.add_argument("--prompt-output", help="Prompt artifact path.")
+    replicate_html.add_argument("--manifest-output", help="Manifest artifact path.")
+    replicate_html.add_argument(
+        "--require-html",
+        action="store_true",
+        help="Fail unless --html-file or --html is provided.",
+    )
+    replicate_html.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow controlled local tests outside the ui_replication phase.",
+    )
+
+    verify_html = subparsers.add_parser(
+        "verify-ui-html", help="Verify reconstructed HTML against a UI reference image."
+    )
+    verify_html.add_argument("--run-dir", required=True, help="Workflow run directory.")
+    verify_html.add_argument("--html", required=True, help="HTML artifact path.")
+    verify_html.add_argument("--reference", required=True, help="Reference mockup/screenshot path.")
+    verify_html.add_argument("--name", help="Stable name for validation output.")
+    verify_html.add_argument("--out-dir", help="Validation output directory.")
+    verify_html.add_argument("--viewport", default="1024x1536", help="Browser viewport, for example 1024x1536.")
+    verify_html.add_argument("--session", default="ui-design-verify", help="agent-browser session name.")
+    verify_html.add_argument("--full-page", action="store_true", help="Capture full page when reference is full-page.")
+    verify_html.add_argument(
+        "--candidate-screenshot",
+        help="Existing browser screenshot to compare. Bypasses agent-browser.",
+    )
+    verify_html.add_argument("--prefix", default="verify", help="Output filename prefix for comparison artifacts.")
+    verify_html.add_argument(
+        "--clip",
+        action="append",
+        default=[],
+        help="Named crop to compare, format name:x,y,w,h. Repeatable.",
+    )
+
     resume = subparsers.add_parser("resume", help="Record an approval decision.")
     resume.add_argument("--run-dir", required=True, help="Workflow run directory.")
     resume.add_argument("--approval", required=True, help="Approval id.")
@@ -2564,6 +2922,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "generate-ui-image":
         generate_ui_image(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "replicate-ui-html":
+        replicate_ui_html(args)
+        print_status(Path(args.run_dir))
+        return 0
+    if args.command == "verify-ui-html":
+        verify_ui_html(args)
         print_status(Path(args.run_dir))
         return 0
     if args.command == "resume":
